@@ -19,8 +19,19 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
-import { Plus, Database, Trash2, Eye } from "lucide-react";
+import { Plus, Database, Trash2, Eye, Terminal, Play, Info, Code, Shield } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { Textarea } from "@/components/ui/textarea";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 
 interface Attribute {
   name: string;
@@ -47,6 +58,9 @@ const Visualize = () => {
   const [formData, setFormData] = useState<Record<string, string>>({});
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
   const [viewingTable, setViewingTable] = useState<string | null>(null);
+  const [sqlQuery, setSqlQuery] = useState("");
+  const [sqlResult, setSqlResult] = useState<{ columns: string[]; rows: any[]; error?: string } | null>(null);
+  const [queryHistory, setQueryHistory] = useState<string[]>([]);
   const { toast } = useToast();
 
   const entities: Entity[] = [
@@ -513,6 +527,221 @@ const Visualize = () => {
     });
   };
 
+  const executeSQL = (query: string) => {
+    const trimmedQuery = query.trim().toUpperCase();
+    if (!trimmedQuery) {
+      setSqlResult({ columns: [], rows: [], error: "Empty query" });
+      return;
+    }
+
+    try {
+      if (trimmedQuery.startsWith("SELECT")) {
+        const match = trimmedQuery.match(/SELECT\s+(.+?)\s+FROM\s+(\w+)(?:\s+WHERE\s+(.+))?/i);
+        if (!match) {
+          throw new Error("Invalid SELECT syntax. Use: SELECT * FROM TableName [WHERE condition]");
+        }
+
+        const columns = match[1].trim() === "*" ? null : match[1].split(",").map((c) => c.trim());
+        const tableName = match[2].trim();
+        const whereClause = match[3]?.trim();
+
+        if (!database[tableName]) {
+          throw new Error(`Table '${tableName}' does not exist`);
+        }
+
+        let results = [...database[tableName]];
+
+        if (whereClause) {
+          const [field, operator, value] = whereClause.split(/\s+/);
+          if (field && operator && value) {
+            const cleanValue = value.replace(/['"]/g, "");
+            results = results.filter((row) => {
+              const rowValue = String(row[field]);
+              switch (operator.toUpperCase()) {
+                case "=":
+                  return rowValue === cleanValue;
+                case "!=":
+                case "<>":
+                  return rowValue !== cleanValue;
+                case "LIKE":
+                  return rowValue.toLowerCase().includes(cleanValue.toLowerCase());
+                default:
+                  return true;
+              }
+            });
+          }
+        }
+
+        const entity = entities.find((e) => e.name === tableName);
+        const allColumns = entity?.attributes.map((a) => a.name) || Object.keys(results[0] || {});
+        const selectedColumns = columns || allColumns;
+
+        setSqlResult({
+          columns: selectedColumns,
+          rows: results.map((row) => {
+            const obj: Record<string, any> = {};
+            selectedColumns.forEach((col) => {
+              obj[col] = row[col] || null;
+            });
+            return obj;
+          }),
+        });
+
+        setQueryHistory((prev) => [query, ...prev.slice(0, 9)]);
+        toast({
+          title: "Query Executed",
+          description: `Returned ${results.length} row(s)`,
+        });
+      } else if (trimmedQuery.startsWith("INSERT")) {
+        const match = trimmedQuery.match(/INSERT\s+INTO\s+(\w+)\s*\(([^)]+)\)\s*VALUES\s*\(([^)]+)\)/i);
+        if (!match) {
+          throw new Error("Invalid INSERT syntax. Use: INSERT INTO TableName (col1, col2) VALUES ('val1', 'val2')");
+        }
+
+        const tableName = match[1].trim();
+        const columns = match[2].split(",").map((c) => c.trim());
+        const values = match[3].split(",").map((v) => v.trim().replace(/^['"]|['"]$/g, ""));
+
+        if (columns.length !== values.length) {
+          throw new Error("Column count doesn't match value count");
+        }
+
+        const entity = entities.find((e) => e.name === tableName);
+        if (!entity) {
+          throw new Error(`Table '${tableName}' does not exist`);
+        }
+
+        const newRecord: Record<string, string> = {};
+        columns.forEach((col, idx) => {
+          newRecord[col] = values[idx];
+        });
+
+        const errors = validateConstraints(entity, newRecord);
+        if (Object.keys(errors).length > 0) {
+          throw new Error(Object.values(errors)[0]);
+        }
+
+        setDatabase((prev) => ({
+          ...prev,
+          [tableName]: [...(prev[tableName] || []), newRecord],
+        }));
+
+        setSqlResult({
+          columns: ["Status"],
+          rows: [{ Status: `1 row inserted into ${tableName}` }],
+        });
+
+        setQueryHistory((prev) => [query, ...prev.slice(0, 9)]);
+        toast({
+          title: "Insert Successful",
+          description: `Record inserted into ${tableName}`,
+        });
+      } else if (trimmedQuery.startsWith("DELETE")) {
+        const match = trimmedQuery.match(/DELETE\s+FROM\s+(\w+)(?:\s+WHERE\s+(.+))?/i);
+        if (!match) {
+          throw new Error("Invalid DELETE syntax. Use: DELETE FROM TableName [WHERE condition]");
+        }
+
+        const tableName = match[1].trim();
+        const whereClause = match[2]?.trim();
+
+        if (!database[tableName]) {
+          throw new Error(`Table '${tableName}' does not exist`);
+        }
+
+        let deletedCount = 0;
+        if (whereClause) {
+          const [field, operator, value] = whereClause.split(/\s+/);
+          if (field && operator && value) {
+            const cleanValue = value.replace(/['"]/g, "");
+            const entity = entities.find((e) => e.name === tableName);
+            const pkName = getPrimaryKey(entity!);
+
+            setDatabase((prev) => {
+              const tableData = prev[tableName] || [];
+              const toDelete = tableData.filter((row) => {
+                const rowValue = String(row[field]);
+                let matches = false;
+                switch (operator.toUpperCase()) {
+                  case "=":
+                    matches = rowValue === cleanValue;
+                    break;
+                  case "!=":
+                  case "<>":
+                    matches = rowValue !== cleanValue;
+                    break;
+                }
+                return matches;
+              });
+
+              deletedCount = toDelete.length;
+
+              const hasDependencies = toDelete.some((record) => {
+                const pkValue = String(record[pkName]);
+                return entities.some((e) =>
+                  e.attributes.some(
+                    (attr) =>
+                      attr.type === "FK" &&
+                      attr.reference === `${tableName}.${pkName}` &&
+                      (database[e.name] || []).some((r) => String(r[attr.name]) === pkValue)
+                  )
+                );
+              });
+
+              if (hasDependencies) {
+                throw new Error("Cannot delete: Record is referenced by other tables");
+              }
+
+              return {
+                ...prev,
+                [tableName]: tableData.filter((row) => {
+                  const rowValue = String(row[field]);
+                  let matches = false;
+                  switch (operator.toUpperCase()) {
+                    case "=":
+                      matches = rowValue === cleanValue;
+                      break;
+                    case "!=":
+                    case "<>":
+                      matches = rowValue !== cleanValue;
+                      break;
+                  }
+                  return !matches;
+                }),
+              };
+            });
+          }
+        } else {
+          throw new Error("DELETE without WHERE clause is not allowed for safety");
+        }
+
+        setSqlResult({
+          columns: ["Status"],
+          rows: [{ Status: `${deletedCount} row(s) deleted from ${tableName}` }],
+        });
+
+        setQueryHistory((prev) => [query, ...prev.slice(0, 9)]);
+        toast({
+          title: "Delete Successful",
+          description: `${deletedCount} record(s) deleted`,
+        });
+      } else {
+        throw new Error("Unsupported SQL command. Supported: SELECT, INSERT, DELETE");
+      }
+    } catch (error: any) {
+      setSqlResult({
+        columns: [],
+        rows: [],
+        error: error.message || "SQL execution error",
+      });
+      toast({
+        title: "SQL Error",
+        description: error.message || "Failed to execute query",
+        variant: "destructive",
+      });
+    }
+  };
+
   useEffect(() => {
     const updateDimensions = () => {
       if (containerRef.current) {
@@ -619,8 +848,37 @@ const Visualize = () => {
 
   const totalRecords = Object.values(database).reduce((sum, records) => sum + records.length, 0);
 
+  const getAllConstraints = () => {
+    const constraints: Array<{ table: string; type: string; constraint: string; description: string }> = [];
+    
+    entities.forEach((entity) => {
+      const pkAttr = entity.attributes.find((a) => a.type === "PK");
+      if (pkAttr) {
+        constraints.push({
+          table: entity.name,
+          type: "Primary Key",
+          constraint: pkAttr.name,
+          description: `Unique identifier for ${entity.name}. Must be unique and not null.`,
+        });
+      }
+
+      entity.attributes
+        .filter((a) => a.type === "FK")
+        .forEach((fkAttr) => {
+          constraints.push({
+            table: entity.name,
+            type: "Foreign Key",
+            constraint: `${fkAttr.name} → ${fkAttr.reference}`,
+            description: `References ${fkAttr.reference}. Must exist in referenced table.`,
+          });
+        });
+    });
+
+    return constraints;
+  };
+
   return (
-    <PageLayout title="ER Model Visualizer">
+    <PageLayout title="ER Model Visualizer & Database Interface">
       <div className="space-y-8">
         <div className="flex items-center justify-between">
           <div>
@@ -633,24 +891,47 @@ const Visualize = () => {
                 <Database className="h-3 w-3 mr-1" />
                 Total Records: {totalRecords}
               </Badge>
+              <Badge variant="outline" className="text-sm">
+                <Shield className="h-3 w-3 mr-1" />
+                Supabase PostgreSQL
+              </Badge>
             </div>
           </div>
         </div>
 
-        <div className="flex flex-wrap gap-4 mb-6">
-          {Object.entries(domainColors).map(([domain, color]) => (
-            <div key={domain} className="flex items-center gap-2">
-              <div className="w-4 h-4 rounded" style={{ backgroundColor: color }}></div>
-              <span className="text-sm text-foreground">{domain}</span>
-            </div>
-          ))}
-        </div>
+        <Tabs defaultValue="visualization" className="w-full">
+          <TabsList className="grid w-full grid-cols-4">
+            <TabsTrigger value="visualization">Visualization</TabsTrigger>
+            <TabsTrigger value="sql">
+              <Terminal className="h-4 w-4 mr-2" />
+              SQL Query
+            </TabsTrigger>
+            <TabsTrigger value="constraints">
+              <Shield className="h-4 w-4 mr-2" />
+              Constraints
+            </TabsTrigger>
+            <TabsTrigger value="documentation">
+              <Code className="h-4 w-4 mr-2" />
+              How It's Made
+            </TabsTrigger>
+          </TabsList>
 
-        <div
-          ref={containerRef}
-          className="relative w-full min-h-screen bg-background p-8"
-          style={{ overflow: "visible" }}
-        >
+          <TabsContent value="visualization" className="space-y-6">
+
+            <div className="flex flex-wrap gap-4 mb-6">
+              {Object.entries(domainColors).map(([domain, color]) => (
+                <div key={domain} className="flex items-center gap-2">
+                  <div className="w-4 h-4 rounded" style={{ backgroundColor: color }}></div>
+                  <span className="text-sm text-foreground">{domain}</span>
+                </div>
+              ))}
+            </div>
+
+            <div
+              ref={containerRef}
+              className="relative w-full min-h-screen bg-background p-8"
+              style={{ overflow: "visible" }}
+            >
           <svg
             ref={svgRef}
             className="absolute top-0 left-0 pointer-events-none"
@@ -773,6 +1054,8 @@ const Visualize = () => {
             )}
           </div>
         </div>
+          </TabsContent>
+        </Tabs>
 
         <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
           <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
