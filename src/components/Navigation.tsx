@@ -11,6 +11,7 @@ const Navigation = () => {
     { to: "/solution", label: "Solution" },
     { to: "/er-model", label: "ER Model" },
     { to: "/relational-model", label: "Relational Model" },
+    { to: "/visualize", label: "Visualize" },
     { to: "/integrity-constraints", label: "Integrity Constraints" },
     { to: "/normalization", label: "Normalization" },
     { to: "/conclusion", label: "Conclusion" },

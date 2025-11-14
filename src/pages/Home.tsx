@@ -8,6 +8,7 @@ const Home = () => {
     { to: "/solution", label: "Solution", description: "Database design approach and system overview" },
     { to: "/er-model", label: "ER Model", description: "Entity-Relationship diagram and domain descriptions" },
     { to: "/relational-model", label: "Relational Model", description: "Complete relational schema with all entities and attributes" },
+    { to: "/visualize", label: "Visualize", description: "Interactive ER model visualization with color-coded tables and relationships" },
     { to: "/integrity-constraints", label: "Integrity Constraints", description: "Primary keys, foreign keys, and validation rules" },
     { to: "/normalization", label: "Normalization", description: "1NF, 2NF, and 3NF analysis" },
     { to: "/conclusion", label: "Conclusion", description: "Project summary and final remarks" },

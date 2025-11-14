@@ -9,6 +9,7 @@ import ProblemStatement from "./pages/ProblemStatement";
 import Solution from "./pages/Solution";
 import ERModel from "./pages/ERModel";
 import RelationalModel from "./pages/RelationalModel";
+import Visualize from "./pages/Visualize";
 import IntegrityConstraints from "./pages/IntegrityConstraints";
 import Normalization from "./pages/Normalization";
 import Conclusion from "./pages/Conclusion";
@@ -32,6 +33,7 @@ const App = () => (
               <Route path="/solution" element={<Solution />} />
               <Route path="/er-model" element={<ERModel />} />
               <Route path="/relational-model" element={<RelationalModel />} />
+              <Route path="/visualize" element={<Visualize />} />
               <Route path="/integrity-constraints" element={<IntegrityConstraints />} />
               <Route path="/normalization" element={<Normalization />} />
               <Route path="/conclusion" element={<Conclusion />} />
