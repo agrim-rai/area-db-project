@@ -1,5 +1,26 @@
 import { useRef, useEffect, useState } from "react";
 import PageLayout from "@/components/PageLayout";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { useToast } from "@/hooks/use-toast";
+import { Plus, Database, Trash2, Eye } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 
 interface Attribute {
   name: string;
@@ -14,10 +35,19 @@ interface Entity {
   color: string;
 }
 
+type DatabaseRecord = Record<string, string | number>;
+
 const Visualize = () => {
   const svgRef = useRef<SVGSVGElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
+  const [database, setDatabase] = useState<Record<string, DatabaseRecord[]>>({});
+  const [selectedEntity, setSelectedEntity] = useState<Entity | null>(null);
+  const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [formData, setFormData] = useState<Record<string, string>>({});
+  const [formErrors, setFormErrors] = useState<Record<string, string>>({});
+  const [viewingTable, setViewingTable] = useState<string | null>(null);
+  const { toast } = useToast();
 
   const entities: Entity[] = [
     {
@@ -361,6 +391,128 @@ const Visualize = () => {
     },
   ];
 
+  const getPrimaryKey = (entity: Entity): string => {
+    const pkAttr = entity.attributes.find((attr) => attr.type === "PK");
+    return pkAttr?.name || "";
+  };
+
+  const getForeignKeyOptions = (attr: Attribute): string[] => {
+    if (attr.type !== "FK" || !attr.reference) return [];
+    const [refTable] = attr.reference.split(".");
+    const refEntity = entities.find((e) => e.name === refTable);
+    if (!refEntity) return [];
+    const pkName = getPrimaryKey(refEntity);
+    const records = database[refTable] || [];
+    return records.map((record) => String(record[pkName])).filter(Boolean);
+  };
+
+  const validateConstraints = (entity: Entity, data: Record<string, string>): Record<string, string> => {
+    const errors: Record<string, string> = {};
+    const pkName = getPrimaryKey(entity);
+    const tableData = database[entity.name] || [];
+
+    entity.attributes.forEach((attr) => {
+      const value = data[attr.name]?.trim() || "";
+
+      if (attr.type === "PK") {
+        if (!value) {
+          errors[attr.name] = `${attr.name} is required (Primary Key)`;
+        } else if (tableData.some((record) => String(record[attr.name]) === value)) {
+          errors[attr.name] = `${attr.name} already exists (Primary Key must be unique)`;
+        }
+      } else if (attr.type === "FK") {
+        if (!value) {
+          errors[attr.name] = `${attr.name} is required (Foreign Key)`;
+        } else if (attr.reference) {
+          const [refTable] = attr.reference.split(".");
+          const refEntity = entities.find((e) => e.name === refTable);
+          if (refEntity) {
+            const refPkName = getPrimaryKey(refEntity);
+            const refRecords = database[refTable] || [];
+            const exists = refRecords.some((record) => String(record[refPkName]) === value);
+            if (!exists) {
+              errors[attr.name] = `Referenced ${refTable}.${refPkName} does not exist`;
+            }
+          }
+        }
+      }
+    });
+
+    return errors;
+  };
+
+  const handleAddData = (entity: Entity) => {
+    setSelectedEntity(entity);
+    setFormData({});
+    setFormErrors({});
+    setIsDialogOpen(true);
+  };
+
+  const handleSubmit = () => {
+    if (!selectedEntity) return;
+
+    const errors = validateConstraints(selectedEntity, formData);
+    if (Object.keys(errors).length > 0) {
+      setFormErrors(errors);
+      toast({
+        title: "Validation Error",
+        description: "Please fix the errors before submitting.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setDatabase((prev) => {
+      const tableData = prev[selectedEntity.name] || [];
+      return {
+        ...prev,
+        [selectedEntity.name]: [...tableData, { ...formData }],
+      };
+    });
+
+    toast({
+      title: "Success",
+      description: `Record added to ${selectedEntity.name} successfully!`,
+    });
+
+    setIsDialogOpen(false);
+    setFormData({});
+    setFormErrors({});
+  };
+
+  const handleDeleteRecord = (tableName: string, pkName: string, pkValue: string) => {
+    const entity = entities.find((e) => e.name === tableName);
+    if (!entity) return;
+
+    const hasDependencies = entities.some((e) =>
+      e.attributes.some(
+        (attr) =>
+          attr.type === "FK" &&
+          attr.reference === `${tableName}.${pkName}` &&
+          (database[e.name] || []).some((record) => String(record[attr.name]) === pkValue)
+      )
+    );
+
+    if (hasDependencies) {
+      toast({
+        title: "Cannot Delete",
+        description: "This record is referenced by other tables. Delete dependent records first.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setDatabase((prev) => ({
+      ...prev,
+      [tableName]: (prev[tableName] || []).filter((record) => String(record[pkName]) !== pkValue),
+    }));
+
+    toast({
+      title: "Deleted",
+      description: `Record deleted from ${tableName}`,
+    });
+  };
+
   useEffect(() => {
     const updateDimensions = () => {
       if (containerRef.current) {
@@ -417,7 +569,7 @@ const Visualize = () => {
           if (attr.type === "FK" && attr.reference) {
             const [refTable] = attr.reference.split(".");
             const refTableElement = document.querySelector(`[data-table-name="${refTable}"]`);
-            
+
             if (refTableElement) {
               const refRect = refTableElement.getBoundingClientRect();
               const refX = refRect.left - containerRect.left + refRect.width / 2;
@@ -446,7 +598,7 @@ const Visualize = () => {
 
     const timeoutId = setTimeout(drawLines, 100);
     return () => clearTimeout(timeoutId);
-  }, [dimensions, entities]);
+  }, [dimensions, entities, database]);
 
   const domainColors: Record<string, string> = {
     "Booking & Passenger Flow": "#3b82f6",
@@ -465,13 +617,25 @@ const Visualize = () => {
     return acc;
   }, {} as Record<string, Entity[]>);
 
+  const totalRecords = Object.values(database).reduce((sum, records) => sum + records.length, 0);
+
   return (
     <PageLayout title="ER Model Visualizer">
       <div className="space-y-8">
-        <p className="text-foreground leading-relaxed">
-          Interactive visualization of all entities and their relationships in the Airport and Airline Management System.
-          Tables are color-coded by domain, and foreign key relationships are shown with connecting lines.
-        </p>
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-foreground leading-relaxed">
+              Interactive visualization of all entities and their relationships in the Airport and Airline Management System.
+              Tables are color-coded by domain, and foreign key relationships are shown with connecting lines.
+            </p>
+            <div className="mt-4 flex items-center gap-4">
+              <Badge variant="outline" className="text-sm">
+                <Database className="h-3 w-3 mr-1" />
+                Total Records: {totalRecords}
+              </Badge>
+            </div>
+          </div>
+        </div>
 
         <div className="flex flex-wrap gap-4 mb-6">
           {Object.entries(domainColors).map(([domain, color]) => (
@@ -497,54 +661,199 @@ const Visualize = () => {
 
           <div className="relative z-10 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
             {Object.entries(groupedEntities).map(([domain, domainEntities]) =>
-              domainEntities.map((entity) => (
-                <div
-                  key={entity.name}
-                  data-table-name={entity.name}
-                  className="bg-card border-2 rounded-lg shadow-lg overflow-hidden"
-                  style={{ borderColor: entity.color }}
-                >
+              domainEntities.map((entity) => {
+                const recordCount = (database[entity.name] || []).length;
+                return (
                   <div
-                    className="px-4 py-3 font-bold text-white text-center"
-                    style={{ backgroundColor: entity.color }}
+                    key={entity.name}
+                    data-table-name={entity.name}
+                    className="bg-card border-2 rounded-lg shadow-lg overflow-hidden hover:shadow-xl transition-shadow"
+                    style={{ borderColor: entity.color }}
                   >
-                    {entity.name}
-                  </div>
-                  <div className="p-2 bg-muted/30">
-                    {entity.attributes.map((attr, idx) => (
-                      <div
-                        key={idx}
-                        className="px-3 py-1.5 text-sm border-b border-border/50 last:border-b-0"
-                      >
-                        <span
-                          className={
-                            attr.type === "PK"
-                              ? "font-bold text-primary"
-                              : attr.type === "FK"
-                              ? "font-semibold italic text-blue-600"
-                              : "text-foreground"
-                          }
-                        >
-                          {attr.name}
-                        </span>
-                        {attr.type === "PK" && (
-                          <span className="ml-2 text-xs text-primary font-semibold">(PK)</span>
+                    <div
+                      className="px-4 py-3 font-bold text-white text-center flex items-center justify-between"
+                      style={{ backgroundColor: entity.color }}
+                    >
+                      <span>{entity.name}</span>
+                      <div className="flex items-center gap-2">
+                        {recordCount > 0 && (
+                          <Badge variant="secondary" className="text-xs">
+                            {recordCount}
+                          </Badge>
                         )}
-                        {attr.type === "FK" && attr.reference && (
-                          <span className="ml-2 text-xs text-blue-600">→ {attr.reference}</span>
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="h-6 w-6 text-white hover:bg-white/20"
+                          onClick={() => handleAddData(entity)}
+                          title={`Add data to ${entity.name}`}
+                        >
+                          <Plus className="h-4 w-4" />
+                        </Button>
+                        {recordCount > 0 && (
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            className="h-6 w-6 text-white hover:bg-white/20"
+                            onClick={() => setViewingTable(viewingTable === entity.name ? null : entity.name)}
+                            title={`View data in ${entity.name}`}
+                          >
+                            <Eye className="h-4 w-4" />
+                          </Button>
                         )}
                       </div>
-                    ))}
+                    </div>
+                    <div className="p-2 bg-muted/30">
+                      {entity.attributes.map((attr, idx) => (
+                        <div
+                          key={idx}
+                          className="px-3 py-1.5 text-sm border-b border-border/50 last:border-b-0"
+                        >
+                          <span
+                            className={
+                              attr.type === "PK"
+                                ? "font-bold text-primary"
+                                : attr.type === "FK"
+                                ? "font-semibold italic text-blue-600"
+                                : "text-foreground"
+                            }
+                          >
+                            {attr.name}
+                          </span>
+                          {attr.type === "PK" && (
+                            <span className="ml-2 text-xs text-primary font-semibold">(PK)</span>
+                          )}
+                          {attr.type === "FK" && attr.reference && (
+                            <span className="ml-2 text-xs text-blue-600">→ {attr.reference}</span>
+                          )}
+                        </div>
+                      ))}
+                      {viewingTable === entity.name && recordCount > 0 && (
+                        <div className="mt-2 pt-2 border-t border-border/50">
+                          <div className="max-h-60 overflow-y-auto space-y-2">
+                            {(database[entity.name] || []).map((record, idx) => {
+                              const pkName = getPrimaryKey(entity);
+                              const pkValue = String(record[pkName]);
+                              return (
+                                <div
+                                  key={idx}
+                                  className="px-2 py-2 text-xs bg-background rounded border border-border/50 group hover:border-primary/50 transition-colors"
+                                >
+                                  <div className="flex items-start justify-between mb-1">
+                                    <span className="font-semibold text-primary">{pkName}: {pkValue}</span>
+                                    <Button
+                                      size="icon"
+                                      variant="ghost"
+                                      className="h-5 w-5 opacity-0 group-hover:opacity-100 transition-opacity"
+                                      onClick={() => handleDeleteRecord(entity.name, pkName, pkValue)}
+                                    >
+                                      <Trash2 className="h-3 w-3 text-destructive" />
+                                    </Button>
+                                  </div>
+                                  <div className="space-y-0.5 text-muted-foreground">
+                                    {entity.attributes
+                                      .filter((attr) => attr.name !== pkName)
+                                      .map((attr) => (
+                                        <div key={attr.name} className="flex gap-2">
+                                          <span className="font-medium">{attr.name}:</span>
+                                          <span>{String(record[attr.name] || "-")}</span>
+                                        </div>
+                                      ))}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+                    </div>
                   </div>
-                </div>
-              ))
+                );
+              })
             )}
           </div>
         </div>
+
+        <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+          <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>Add Record to {selectedEntity?.name}</DialogTitle>
+              <DialogDescription>
+                Fill in the form below. Primary keys are required and must be unique. Foreign keys must reference existing records.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4 py-4">
+              {selectedEntity?.attributes.map((attr) => {
+                const isFK = attr.type === "FK";
+                const fkOptions = isFK ? getForeignKeyOptions(attr) : [];
+                return (
+                  <div key={attr.name} className="space-y-2">
+                    <Label htmlFor={attr.name} className="flex items-center gap-2">
+                      {attr.name}
+                      {attr.type === "PK" && (
+                        <Badge variant="outline" className="text-xs">
+                          PK
+                        </Badge>
+                      )}
+                      {attr.type === "FK" && (
+                        <Badge variant="outline" className="text-xs">
+                          FK
+                        </Badge>
+                      )}
+                    </Label>
+                    {isFK && fkOptions.length > 0 ? (
+                      <Select
+                        value={formData[attr.name] || ""}
+                        onValueChange={(value) =>
+                          setFormData((prev) => ({ ...prev, [attr.name]: value }))
+                        }
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder={`Select ${attr.reference}`} />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {fkOptions.map((option) => (
+                            <SelectItem key={option} value={option}>
+                              {option}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    ) : (
+                      <Input
+                        id={attr.name}
+                        type={attr.name.toLowerCase().includes("date") || attr.name.toLowerCase().includes("time") ? "datetime-local" : "text"}
+                        value={formData[attr.name] || ""}
+                        onChange={(e) =>
+                          setFormData((prev) => ({ ...prev, [attr.name]: e.target.value }))
+                        }
+                        placeholder={`Enter ${attr.name}`}
+                        className={formErrors[attr.name] ? "border-destructive" : ""}
+                      />
+                    )}
+                    {formErrors[attr.name] && (
+                      <p className="text-sm text-destructive">{formErrors[attr.name]}</p>
+                    )}
+                    {isFK && fkOptions.length === 0 && (
+                      <p className="text-sm text-muted-foreground">
+                        No records available in {attr.reference?.split(".")[0]}. Add records there first.
+                      </p>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setIsDialogOpen(false)}>
+                Cancel
+              </Button>
+              <Button onClick={handleSubmit}>Add Record</Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </div>
     </PageLayout>
   );
 };
 
 export default Visualize;
-
