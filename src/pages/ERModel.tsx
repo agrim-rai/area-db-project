@@ -1,19 +1,20 @@
 import PageLayout from "@/components/PageLayout";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
-import { Card } from "@/components/ui/card";
+import ImageViewer from "@/components/ImageViewer";
 
 const ERModel = () => {
   return (
     <PageLayout title="ER Model">
       <div className="space-y-8">
-        {/* ER Diagram Placeholder */}
-        <Card className="p-8 bg-muted/30">
-          <div className="text-center text-muted-foreground">
-            <p className="mb-2 font-semibold">ER Diagram</p>
-            <p className="text-sm">Placeholder for ER Model diagram image</p>
-            <p className="text-xs mt-2">(Upload your ER diagram here)</p>
-          </div>
-        </Card>
+        {/* ER Diagram */}
+        <div>
+          <h2 className="text-2xl font-semibold mb-4">Entity-Relationship Diagram</h2>
+          <ImageViewer
+            src="/Untitled diagram-2025-10-09-095231.png"
+            alt="ER Model Diagram for Airline Management System"
+            className="w-full"
+          />
+        </div>
 
         <div className="prose prose-slate max-w-none">
           <p className="text-foreground leading-relaxed mb-6">
